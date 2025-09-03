@@ -1,9 +1,13 @@
+import 'dart:convert';
 import 'dart:io';
-import 'package:derma_scan/src/modules/scan/image_preview.dart';
+import 'package:derma_scan/src/data/models/response/album_response_model.dart';
+import 'package:derma_scan/src/data/models/response/slika_response_model.dart';
+import 'package:derma_scan/src/services/image_service.dart';
 import 'package:flutter/material.dart';
-import 'package:derma_scan/src/components/custom_appbar.dart';
-import 'package:derma_scan/src/data/db/db_helper.dart';
 import 'package:intl/intl.dart';
+import 'package:derma_scan/src/components/custom_appbar.dart';
+import 'package:derma_scan/src/modules/scan/image_preview.dart';
+import '../../helpers/shared_preferences.dart';
 
 class HistoryScreen extends StatefulWidget {
   HistoryScreen({Key? key}) : super(key: key);
@@ -15,43 +19,47 @@ class HistoryScreen extends StatefulWidget {
 class HistoryScreenState extends State<HistoryScreen> {
   bool isLoading = true;
   bool isGroupSelected = false;
-  int? selectedGroupId;
-  String? selectedGroupName;
-  List<Map<String, dynamic>> groups = [];
-  List<Map<String, dynamic>> images = [];
+  AlbumResponse? selectedAlbum;
+  List<AlbumResponse> albums = [];
+  List<SlikaResponse> images = [];
+
+  final ImageService imageService = ImageService();
 
   @override
   void initState() {
     super.initState();
-    _loadGroups();
+    _loadAlbums();
   }
 
-  Future<void> _loadGroups() async {
+  Future<void> _loadAlbums() async {
     setState(() => isLoading = true);
-    final db = await DBHelper().database;
-    final result = await db.query('groups');
+
+    final deviceId = await SharedPreferencesHelper.getDeviceId();
+    if (deviceId == null) {
+      setState(() => isLoading = false);
+      return;
+    }
+
+    final fetchedAlbums = await imageService.getAlbumsByUser(deviceId);
     setState(() {
-      groups = result;
+      albums = fetchedAlbums;
       isLoading = false;
       isGroupSelected = false;
-      selectedGroupId = null;
+      selectedAlbum = null;
       images = [];
     });
   }
 
-  Future<void> _loadImagesForGroup(int groupId, String groupName) async {
+  Future<void> _loadImagesForAlbum(AlbumResponse album) async {
     setState(() {
       isLoading = true;
       isGroupSelected = true;
-      selectedGroupId = groupId;
-      selectedGroupName = groupName;
+      selectedAlbum = album;
     });
-    final db = await DBHelper().database;
-    final result = await db.query('images',
-        where: 'group_id = ?', whereArgs: [groupId], orderBy: 'date DESC');
-    await Future.delayed(const Duration(milliseconds: 300)); // simulate loading
+
+    final fetchedImages = await imageService.getSlikeByAlbum(album.id);
     setState(() {
-      images = result;
+      images = fetchedImages;
       isLoading = false;
     });
   }
@@ -64,25 +72,23 @@ class HistoryScreenState extends State<HistoryScreen> {
           ? const Center(child: CircularProgressIndicator())
           : isGroupSelected
               ? _buildImagesList()
-              : _buildGroupList(),
+              : _buildAlbumList(),
     );
   }
 
-  Widget _buildGroupList() {
+  Widget _buildAlbumList() {
     return ListView.builder(
-      itemCount: groups.length,
+      itemCount: albums.length,
       padding: const EdgeInsets.all(16),
       itemBuilder: (context, index) {
-        final group = groups[index];
+        final album = albums[index];
         return Card(
           margin: const EdgeInsets.only(bottom: 12),
           child: ListTile(
-            title: Text(group['name']),
-            subtitle: Text(
-              'Kreirano: ${_formatDate(group['created_at'])}',
-            ),
+            title: Text(album.naziv ?? ''),
+            subtitle: Text('Kreirano: ${_formatDate(album.datumKreiranja)}'),
             trailing: const Icon(Icons.chevron_right),
-            onTap: () => _loadImagesForGroup(group['id'], group['name']),
+            onTap: () => _loadImagesForAlbum(album),
           ),
         );
       },
@@ -95,11 +101,11 @@ class HistoryScreenState extends State<HistoryScreen> {
       children: [
         ListTile(
           title: Text(
-            'Album: $selectedGroupName',
+            'Album: ${selectedAlbum?.naziv ?? ''}',
             style: const TextStyle(fontWeight: FontWeight.bold),
           ),
           trailing: TextButton(
-            onPressed: _loadGroups,
+            onPressed: _loadAlbums,
             child: const Text('Nazad'),
           ),
         ),
@@ -119,12 +125,10 @@ class HistoryScreenState extends State<HistoryScreen> {
               children: images.map((img) {
                 return GestureDetector(
                   onTap: () {
-                    debugPrint("Tapped on image: ${img['path']}");
                     Navigator.push(
                       context,
                       MaterialPageRoute(
-                        builder: (_) =>
-                            PreviewOfImageScreen(imageId: img['id']),
+                        builder: (_) => PreviewOfImageScreen(imageId: img.id),
                       ),
                     );
                   },
@@ -138,8 +142,9 @@ class HistoryScreenState extends State<HistoryScreen> {
                         ClipRRect(
                           borderRadius: const BorderRadius.vertical(
                               top: Radius.circular(8)),
-                          child: Image.file(
-                            File(img['path']),
+                          child: Image.memory(
+                            base64Decode(
+                                img.slikaBaseEncoded), // decode directly
                             height: 170,
                             width: double.infinity,
                             fit: BoxFit.cover,
@@ -157,16 +162,15 @@ class HistoryScreenState extends State<HistoryScreen> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                _formatDate(img['date']),
+                                _formatDate(img.datumKreiranja),
                                 style: const TextStyle(
                                     fontSize: 13, fontWeight: FontWeight.w500),
                               ),
-                              if (img['note'] != null &&
-                                  img['note'].toString().isNotEmpty)
+                              if (img.opis != null)
                                 Padding(
                                   padding: const EdgeInsets.only(top: 4),
                                   child: Text(
-                                    img['note'],
+                                    img.opis!,
                                     style: const TextStyle(
                                         fontSize: 12, color: Colors.black87),
                                     maxLines: 2,

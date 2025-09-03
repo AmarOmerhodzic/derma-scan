@@ -26,7 +26,7 @@ abstract class BaseService {
 class DioClient {
   final _dio = Dio(
     BaseOptions(
-      baseUrl: 'https://65c6-5-43-78-110.ngrok-free.app/api',
+      baseUrl: 'https://a03b97200fb1.ngrok-free.app/api',
       connectTimeout: 500000,
       receiveTimeout: 100000,
       responseType: ResponseType.json,

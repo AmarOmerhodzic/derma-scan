@@ -1,13 +1,16 @@
 import 'dart:io';
+import 'dart:convert';
 import 'package:derma_scan/src/components/custom_button.dart';
 import 'package:derma_scan/src/components/custom_webview.dart';
 import 'package:derma_scan/src/constants/color.dart';
-import 'package:derma_scan/src/data/db/db_helper.dart';
+import 'package:derma_scan/src/data/models/request/album_request_model.dart';
+import 'package:derma_scan/src/data/models/request/slika_request_model.dart';
+import 'package:derma_scan/src/data/models/response/album_response_model.dart';
 import 'package:derma_scan/src/helpers/shared_preferences.dart';
 import 'package:derma_scan/src/modules/history/history_screen.dart';
+import 'package:derma_scan/src/services/image_service.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../components/custom_appbar.dart';
 import '../../data/models/response/mole_prediction_response_model.dart';
@@ -24,6 +27,7 @@ class ResultScreen extends StatefulWidget {
 
 class ResultScreenState extends State<ResultScreen> {
   late String formattedDate;
+  final ImageService imageService = ImageService();
 
   @override
   void initState() {
@@ -32,17 +36,23 @@ class ResultScreenState extends State<ResultScreen> {
   }
 
   void _saveScan() async {
-    final db = await DBHelper().database;
-    List<Map<String, dynamic>> groups = await db.query('groups');
-    final List<String> groupList =
-        groups.map((g) => g['name'] as String).toList();
-
-    bool useExistingGroup = groupList.isNotEmpty;
     final TextEditingController newGroupController = TextEditingController();
     final TextEditingController noteController = TextEditingController();
+    bool useExistingGroup = false;
     String? selectedGroup;
+
     final prediction = widget.result?.result ?? 'Unknown';
     final probability = (widget.result?.confidence ?? 0).toStringAsFixed(2);
+
+    String? deviceId = await SharedPreferencesHelper.getDeviceId();
+
+    // Fetch existing albums from API
+    List<String?> albumNames = [];
+    try {
+      final albums = await imageService.getAlbumsByUser(deviceId ??''); // replace with actual user ID
+      albumNames = albums.map((a) => a.naziv).toList();
+      useExistingGroup = albumNames.isNotEmpty;
+    } catch (_) {}
 
     showDialog(
       context: context,
@@ -55,7 +65,7 @@ class ResultScreenState extends State<ResultScreen> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    if (groupList.isNotEmpty)
+                    if (albumNames.isNotEmpty)
                       SwitchListTile(
                         title: const Text(
                           'Koristi postojeći album',
@@ -67,14 +77,14 @@ class ResultScreenState extends State<ResultScreen> {
                           setModalState(() => useExistingGroup = val);
                         },
                       ),
-                    if (useExistingGroup && groupList.isNotEmpty)
+                    if (useExistingGroup && albumNames.isNotEmpty)
                       DropdownButtonFormField<String>(
                         value: selectedGroup,
                         hint: const Text('Odaberite album'),
-                        items: groupList.map((group) {
+                        items: albumNames.map((group) {
                           return DropdownMenuItem(
                             value: group,
-                            child: Text(group),
+                            child: Text(group!),
                           );
                         }).toList(),
                         onChanged: (val) {
@@ -112,12 +122,12 @@ class ResultScreenState extends State<ResultScreen> {
             ),
             ElevatedButton(
               onPressed: () async {
-                final group = useExistingGroup
+                final albumName = useExistingGroup
                     ? selectedGroup
                     : newGroupController.text.trim();
                 final note = noteController.text.trim();
 
-                if (group == null || group.isEmpty) {
+                if (albumName == null || albumName.isEmpty) {
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(
                         content: Text('Molimo unesite naziv albuma')),
@@ -125,46 +135,65 @@ class ResultScreenState extends State<ResultScreen> {
                   return;
                 }
 
-                // Save to shared preferences
+                // Save image path locally
                 if (widget.imageFile?.path != null) {
                   await SharedPreferencesHelper.saveImagePath(
                       widget.imageFile!.path);
                 }
 
-                // Get group ID (or insert new group)
-                int groupId;
-                final existing = await db
-                    .query('groups', where: 'name = ?', whereArgs: [group]);
-                if (existing.isNotEmpty) {
-                  groupId = existing.first['id'] as int;
-                } else {
-                  groupId = await db.insert('groups', {
-                    'name': group,
-                    'created_at': DateTime.now().toIso8601String(),
-                  });
+                try {
+                  // Check if album exists
+                  String albumId;
+                  final existingAlbums = await imageService.getAlbumsByUser(deviceId ?? '');
+                  final existingAlbum = existingAlbums.cast<AlbumResponse?>().firstWhere(
+                    (a) => a?.naziv == albumName,
+                    orElse: () => null,
+                  );
+
+
+                    if (existingAlbum != null) {
+                      albumId = existingAlbum.id;
+                    } else {
+                      // If album doesn't exist, create it asynchronously
+                      final newAlbum = await imageService.createAlbum(
+                        AlbumRequest(korisnikId: deviceId ?? '', naziv: albumName),
+                      );
+                      albumId = newAlbum.id;
+                    }
+                  
+                  albumId = existingAlbum?.id ?? '';
+
+                  // Save image
+                  final bytes = await widget.imageFile!.readAsBytes();
+                    final base64Image = base64Encode(bytes);
+
+                    final slikaRequest = SlikaRequest(
+                      albumId: albumId,
+                      korisnikId: deviceId ?? '',
+                      opis: note,
+                      rezultat: prediction,
+                      slikaBaseEncoded: base64Image,
+                    );
+
+                    final slikaResponse = await imageService.createSlika(slikaRequest);
+
+                  Navigator.pop(context);
+                  Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => HistoryScreen(),
+                      ));
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                        content: Text('Skeniranje je uspješno sačuvano')),
+                  );
+                } catch (e) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                        content:
+                            Text('Greška prilikom spremanja, pokušajte ponovo')),
+                  );
                 }
-
-                // Insert image entry
-                await db.insert('images', {
-                  'group_id': groupId,
-                  'path': widget.imageFile?.path ?? '',
-                  'note': note,
-                  'date': DateTime.now().toIso8601String(),
-                  'result': '$prediction ($probability%)',
-                });
-
-                Navigator.pop(context);
-
-                Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => HistoryScreen(),
-                    ));
-
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                      content: Text('Skeniranje je uspješno sačuvano')),
-                );
               },
               style: ElevatedButton.styleFrom(
                   backgroundColor: ColorConstants.secondary),

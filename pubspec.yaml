@@ -49,6 +49,7 @@ dependencies:
   url_launcher: ^6.1.10
   flutter_webview_pro: ^3.0.1+4
   sqflite: ^2.3.2
+  mobile_device_identifier: ^0.0.2
   
 
 dev_dependencies:

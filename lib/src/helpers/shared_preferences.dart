@@ -28,4 +28,16 @@ class SharedPreferencesHelper {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(imagePathKey);
   }
+
+  static const String deviceIdKey = 'device_id';
+
+  static Future<void> saveDeviceId(String id) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(deviceIdKey, id);
+  }
+
+  static Future<String?> getDeviceId() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(deviceIdKey);
+  }
 }

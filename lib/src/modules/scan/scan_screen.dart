@@ -1,9 +1,13 @@
+import 'dart:convert';
 import 'dart:io';
 import 'package:derma_scan/src/components/custom_appbar.dart';
 import 'package:derma_scan/src/constants/color.dart';
-import 'package:derma_scan/src/data/db/db_helper.dart';
+import 'package:derma_scan/src/data/models/response/slika_response_model.dart';
+import 'package:derma_scan/src/helpers/shared_preferences.dart';
 import 'package:derma_scan/src/modules/scan/image_preview.dart';
+import 'package:derma_scan/src/services/image_service.dart';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class ScanScreen extends StatefulWidget {
   ScanScreen({Key? key}) : super(key: key);
@@ -13,24 +17,35 @@ class ScanScreen extends StatefulWidget {
 }
 
 class ScanScreenState extends State<ScanScreen> {
-  List<Map<String, dynamic>> recentImages = [];
+  List<SlikaResponse> recentImages = [];
+  final ImageService imageService = ImageService();
+  String? korisnikId;
 
   @override
   void initState() {
     super.initState();
-    _loadRecentImages();
+    _loadKorisnikAndRecentImages();
+  }
+
+  Future<void> _loadKorisnikAndRecentImages() async {
+    korisnikId = await SharedPreferencesHelper.getDeviceId();
+
+    if (korisnikId != null) {
+      await _loadRecentImages();
+    }
   }
 
   Future<void> _loadRecentImages() async {
-    final db = await DBHelper().database;
-    final result = await db.query(
-      'images',
-      orderBy: 'date DESC',
-      limit: 3,
-    );
-    setState(() {
-      recentImages = result;
-    });
+    if (korisnikId == null) return;
+
+    try {
+      final images = await imageService.getLastThreeSlike(korisnikId!);
+      setState(() {
+        recentImages = images;
+      });
+    } catch (e) {
+      debugPrint("Error loading recent images: $e");
+    }
   }
 
   @override
@@ -116,12 +131,12 @@ class ScanScreenState extends State<ScanScreen> {
                           margin: const EdgeInsets.only(right: 8),
                           child: GestureDetector(
                             onTap: () {
-                              debugPrint("Tapped on image: ${img['path']}");
+                              debugPrint("Tapped on image: ${img.id}");
                               Navigator.push(
                                 context,
                                 MaterialPageRoute(
                                   builder: (_) =>
-                                      PreviewOfImageScreen(imageId: img['id']),
+                                      PreviewOfImageScreen(imageId: img.id),
                                 ),
                               );
                             },
@@ -136,8 +151,8 @@ class ScanScreenState extends State<ScanScreen> {
                                   ClipRRect(
                                     borderRadius: const BorderRadius.vertical(
                                         top: Radius.circular(8)),
-                                    child: Image.file(
-                                      File(img['path']),
+                                    child: Image.memory(
+                                      base64Decode(img.slikaBaseEncoded ?? ''),
                                       height: 90,
                                       width: double.infinity,
                                       fit: BoxFit.cover,
@@ -154,7 +169,7 @@ class ScanScreenState extends State<ScanScreen> {
                                     padding: const EdgeInsets.symmetric(
                                         horizontal: 6, vertical: 4),
                                     child: Text(
-                                      img['note'] ?? '',
+                                      img.opis ?? '',
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
                                       style: const TextStyle(fontSize: 12),
@@ -168,8 +183,7 @@ class ScanScreenState extends State<ScanScreen> {
                       },
                     ),
             ),
-
-            const Spacer(), // Pushes reminder to bottom
+            const Spacer(),
             const Column(
               mainAxisAlignment: MainAxisAlignment.start,
               crossAxisAlignment: CrossAxisAlignment.start,

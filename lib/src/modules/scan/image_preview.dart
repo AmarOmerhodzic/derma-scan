@@ -1,19 +1,19 @@
-import 'dart:io';
+import 'dart:convert';
 import 'package:derma_scan/src/components/custom_button.dart';
 import 'package:derma_scan/src/components/custom_webview.dart';
 import 'package:derma_scan/src/constants/color.dart';
-import 'package:derma_scan/src/data/db/db_helper.dart';
-import 'package:derma_scan/src/helpers/shared_preferences.dart';
+import 'package:derma_scan/src/data/models/request/slika_update_request_model.dart';
+import 'package:derma_scan/src/data/models/response/slika_response_model.dart';
 import 'package:derma_scan/src/modules/history/history_screen.dart';
+import 'package:derma_scan/src/services/image_service.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../components/custom_appbar.dart';
-import '../../data/models/response/mole_prediction_response_model.dart';
 
 class PreviewOfImageScreen extends StatefulWidget {
-  final int? imageId;
+  final String? imageId; // changed to string because API uses string ID
 
   PreviewOfImageScreen({Key? key, this.imageId}) : super(key: key);
 
@@ -25,35 +25,35 @@ class PreviewOfImageScreenState extends State<PreviewOfImageScreen> {
   String formattedDate = '';
   String note = '';
   String prediction = '';
-  String probability = '';
-  String? imagePath;
+  String? imageBaseEncoded;
   bool isFromSavedImage = false;
   final TextEditingController _noteController = TextEditingController();
   bool isEditEnabled = false;
+
+  final ImageService imageService = ImageService();
 
   @override
   void initState() {
     super.initState();
 
     if (widget.imageId != null) {
-      _loadSavedImageDetails(widget.imageId!);
+      _loadImageDetails(widget.imageId!);
       isFromSavedImage = true;
     }
   }
 
-  Future<void> _loadSavedImageDetails(int id) async {
-    final db = await DBHelper().database;
-    final result = await db.query('images', where: 'id = ?', whereArgs: [id]);
-
-    if (result.isNotEmpty) {
-      final img = result.first;
+  Future<void> _loadImageDetails(String id) async {
+    try {
+      final SlikaResponse image = await imageService.getSlikaById(id);
       setState(() {
-        prediction = img['result'].toString();
-        note = img['note'].toString();
-        imagePath = img['path'].toString();
-        formattedDate = _formatDate(img['date']);
+        prediction = image.rezultat ?? '';
+        note = image.opis ?? '';
+        imageBaseEncoded = image.slikaBaseEncoded;
+        formattedDate = _formatDate(image.datumKreiranja);
         _noteController.text = note;
       });
+    } catch (e) {
+      debugPrint("Error loading image details: $e");
     }
   }
 
@@ -94,25 +94,21 @@ class PreviewOfImageScreenState extends State<PreviewOfImageScreen> {
       ),
     );
 
-    if (confirmed == true) {
+    if (confirmed == true && widget.imageId != null) {
       try {
-        final db = await DBHelper().database;
-        await db.update(
-          'images',
-          {'note': _noteController.text.trim()},
-          where: 'id = ?',
-          whereArgs: [widget.imageId],
-        );
+        var model = SlikaUpdateRequest(opis: _noteController.text.trim());
+        await imageService.updateSlika(widget.imageId!, model);
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Note updated successfully')),
         );
         setState(() {
           isEditEnabled = false;
+          note = _noteController.text.trim();
         });
-      } on Exception catch (e) {
+      } catch (e) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-              content: Text('Error while  updating, please try again.')),
+              content: Text('Error while updating, please try again.')),
         );
         setState(() {
           isEditEnabled = false;
@@ -146,15 +142,14 @@ class PreviewOfImageScreenState extends State<PreviewOfImageScreen> {
       ),
     );
 
-    if (confirmed == true) {
+    if (confirmed == true && widget.imageId != null) {
       try {
-        final db = await DBHelper().database;
-        await db.delete('images', where: 'id = ?', whereArgs: [widget.imageId]);
+        await imageService.deleteSlika(widget.imageId!);
         Navigator.pop(context);
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Scan deleted')),
         );
-      } on Exception catch (e) {
+      } catch (e) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
               content: Text('Error while deleting image, please try again.')),
@@ -186,10 +181,13 @@ class PreviewOfImageScreenState extends State<PreviewOfImageScreen> {
                   style: const TextStyle(
                       fontSize: 16, fontWeight: FontWeight.bold)),
               const SizedBox(height: 16),
-              if (imagePath != null)
+              if (imageBaseEncoded != null)
                 ClipRRect(
                   borderRadius: BorderRadius.circular(10),
-                  child: Image.file(File(imagePath!)),
+                  child: Image.memory(
+                    base64Decode(imageBaseEncoded!),
+                    fit: BoxFit.cover,
+                  ),
                 ),
               const SizedBox(height: 16),
               const Text(
